@@ -238,6 +238,12 @@ src_libdrivers_la_SOURCES += \
 	src/hardware/beaglelogic/beaglelogic_native.c \
 	src/hardware/beaglelogic/beaglelogic_tcp.c
 endif
+if HW_BRYMEN_BM52X
+src_libdrivers_la_SOURCES += \
+	src/hardware/brymen-bm52x/protocol.h \
+	src/hardware/brymen-bm52x/protocol.c \
+	src/hardware/brymen-bm52x/api.c
+endif
 if HW_BRYMEN_BM86X
 src_libdrivers_la_SOURCES += \
 	src/hardware/brymen-bm86x/protocol.h \

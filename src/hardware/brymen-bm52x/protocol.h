@@ -28,6 +28,9 @@
 #define LOG_PREFIX "brymen-bm52x"
 
 struct dev_context {
+        struct sr_sw_limits sw_limits;
+        int detached_kernel_driver; /**< Whether kernel driver was detached or not */
+        int interrupt_pending;
 };
 
 SR_PRIV int brymen_bm52x_receive_data(int fd, int revents, void *cb_data);

@@ -20,117 +20,183 @@
 #include <config.h>
 #include "protocol.h"
 
+#define BRYMEN_BU86X "0820.0001" /* BU-86X USB interface vendor,product id */
+
 static struct sr_dev_driver brymen_bm52x_driver_info;
+
+static const uint32_t scanopts[] = {
+        SR_CONF_CONN,
+};
+
+static const uint32_t drvopts[] = {
+        SR_CONF_MULTIMETER,
+};
+
+static const uint32_t devopts[] = {
+        SR_CONF_CONTINUOUS,
+        SR_CONF_LIMIT_SAMPLES | SR_CONF_GET | SR_CONF_SET,
+        SR_CONF_LIMIT_MSEC | SR_CONF_GET | SR_CONF_SET,
+};
 
 static GSList *scan(struct sr_dev_driver *di, GSList *options)
 {
+	GSList *usb_devices, *devices, *l;
 	struct drv_context *drvc;
-	GSList *devices;
+	struct dev_context *devc;
+        struct sr_dev_inst *sdi;
+        struct sr_usb_dev_inst *usb;
+        struct sr_config *src;
+        const char *conn;
 
-	(void)options;
+        drvc = di->context;
 
+        conn = BRYMEN_BU86X;
+        for (l = options; l; l = l->next) {
+                src = l->data;
+                switch (src->key) {
+                case SR_CONF_CONN:
+                        conn = g_variant_get_string(src->data, NULL);
+                        break;
+                }
+        }
 	devices = NULL;
-	drvc = di->context;
 	drvc->instances = NULL;
 
-	/* TODO: scan for devices, either based on a SR_CONF_CONN option
-	 * or on a USB scan. */
+	if (!(usb_devices = sr_usb_find(drvc->sr_ctx->libusb_ctx, conn)))
+                return NULL;
 
-	return devices;
+        for (l = usb_devices; l; l = l->next) {
+                usb = l->data;
+
+                sdi = g_malloc0(sizeof(struct sr_dev_inst));
+                sdi->status = SR_ST_INACTIVE;
+                sdi->vendor = g_strdup("Brymen");
+                sdi->model = g_strdup("BM52X");
+                devc = g_malloc0(sizeof(struct dev_context));
+                sdi->priv = devc;
+                sr_channel_new(sdi, 0, SR_CHANNEL_ANALOG, TRUE, "P1");
+                sr_channel_new(sdi, 1, SR_CHANNEL_ANALOG, TRUE, "P2");
+
+                sdi->inst_type = SR_INST_USB;
+                sdi->conn = usb;
+
+                sr_sw_limits_init(&devc->sw_limits);
+
+                devices = g_slist_append(devices, sdi);
+        }
+
+        return std_scan_complete(di, devices);
 }
 
 static int dev_open(struct sr_dev_inst *sdi)
 {
-	(void)sdi;
+        struct sr_dev_driver *di = sdi->driver;
+        struct drv_context *drvc = di->context;
+        struct sr_usb_dev_inst *usb;
+        struct dev_context *devc;
+        int ret;
 
-	/* TODO: get handle from sdi->conn and open it. */
+        usb = sdi->conn;
+        devc = sdi->priv;
 
+       if ((ret = sr_usb_open(drvc->sr_ctx->libusb_ctx, usb)) < 0)
+		return SR_ERR;
+
+       if (libusb_kernel_driver_active(usb->devhdl, 0) == 1) {
+                ret = libusb_detach_kernel_driver(usb->devhdl, 0);
+                if (ret < 0) {
+                        sr_err("Failed to detach kernel driver: %s.",
+                               libusb_error_name(ret));
+                        return SR_ERR;
+                }
+                devc->detached_kernel_driver = 1;
+        }
+
+        if ((ret = libusb_claim_interface(usb->devhdl, 0)) < 0) {
+                sr_err("Failed to claim interface 0: %s.",
+                       libusb_error_name(ret));
+                return SR_ERR;
+        }
 	return SR_OK;
 }
 
 static int dev_close(struct sr_dev_inst *sdi)
 {
-	(void)sdi;
+        struct sr_usb_dev_inst *usb;
+        struct dev_context *devc;
+        int ret;
 
-	/* TODO: get handle from sdi->conn and close it. */
+        usb = sdi->conn;
+        devc = sdi->priv;
 
-	return SR_OK;
+        if (!usb->devhdl)
+                return SR_OK;
+
+        if ((ret = libusb_release_interface(usb->devhdl, 0)))
+                sr_err("Failed to release interface 0: %s.\n", libusb_error_name(ret));
+
+        if (!ret && devc->detached_kernel_driver) {
+                if ((ret = libusb_attach_kernel_driver(usb->devhdl, 0)))
+                        sr_err("Failed to attach kernel driver: %s.\n",
+                               libusb_error_name(ret));
+                else
+                        devc->detached_kernel_driver = 0;
+        }
+
+        libusb_close(usb->devhdl);
+
+        return (ret == 0) ? SR_OK : SR_ERR;
 }
 
 static int config_get(uint32_t key, GVariant **data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	int ret;
+        struct dev_context *devc = sdi->priv;
 
-	(void)sdi;
-	(void)data;
-	(void)cg;
+        (void)cg;
 
-	ret = SR_OK;
-	switch (key) {
-	/* TODO */
-	default:
-		return SR_ERR_NA;
-	}
-
-	return ret;
+        return sr_sw_limits_config_get(&devc->sw_limits, key, data);
 }
 
 static int config_set(uint32_t key, GVariant *data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	int ret;
+        struct dev_context *devc;
 
-	(void)sdi;
-	(void)data;
-	(void)cg;
+        (void)cg;
 
-	ret = SR_OK;
-	switch (key) {
-	/* TODO */
-	default:
-		ret = SR_ERR_NA;
-	}
+        devc = sdi->priv;
 
-	return ret;
+        return sr_sw_limits_config_set(&devc->sw_limits, key, data);
 }
 
 static int config_list(uint32_t key, GVariant **data,
 	const struct sr_dev_inst *sdi, const struct sr_channel_group *cg)
 {
-	int ret;
-
-	(void)sdi;
-	(void)data;
-	(void)cg;
-
-	ret = SR_OK;
-	switch (key) {
-	/* TODO */
-	default:
-		return SR_ERR_NA;
-	}
-
-	return ret;
+	return STD_CONFIG_LIST(key, data, sdi, cg, scanopts, drvopts, devopts);
 }
 
 static int dev_acquisition_start(const struct sr_dev_inst *sdi)
 {
-	/* TODO: configure hardware, reset acquisition state, set up
-	 * callbacks and send header packet. */
+        struct dev_context *devc;
 
-	(void)sdi;
+        devc = sdi->priv;
 
-	return SR_OK;
+        sr_sw_limits_acquisition_start(&devc->sw_limits);
+        std_session_send_df_header(sdi);
+        sr_session_source_add(sdi->session, -1, 0, 10,
+                        brymen_bm52x_receive_data, (void *)sdi);
+
+        return SR_OK;
+
 }
 
 static int dev_acquisition_stop(struct sr_dev_inst *sdi)
 {
-	/* TODO: stop acquisition. */
+        std_session_send_df_end(sdi);
+        sr_session_source_remove(sdi->session, -1);
+        return SR_OK;
 
-	(void)sdi;
-
-	return SR_OK;
 }
 
 static struct sr_dev_driver brymen_bm52x_driver_info = {
